@@ -128,6 +128,9 @@ def uri_compile(uri):
     return types.SimpleNamespace(protos=protos, rproto=protos[0], cipher=cipher, auth=url.fragment.encode(), match=match, server=server, connect=connect, bind=loc or url.path, sslclient=sslclient, sslserver=sslserver)
 
 def main():
+    ###################
+    # Parse Arguments #
+    ###################
     parser = argparse.ArgumentParser(description=__description__+'\nSupported protocols: http,socks,shadowsocks,redirect', epilog='Online help: <https://github.com/qwj/python-proxy>')
     parser.add_argument('-i', dest='listen', default=[], action='append', type=uri_compile, help='proxy server setting uri (default: http+socks://:8080/)')
     parser.add_argument('-r', dest='rserver', default=[], action='append', type=uri_compile, help='remote server setting uri (default: direct)')
@@ -138,9 +141,13 @@ def main():
     parser.add_argument('--get', dest='gets', default=[], action='append', help='http custom path/file')
     parser.add_argument('--version', action='version', version='%(prog)s {}'.format(__version__))
     args = parser.parse_args()
+
+    #Default listening settings
     if not args.listen:
         args.listen.append(uri_compile('http+socks://:8080/'))
     args.httpget = {}
+
+    # Parse Misc settings
     if args.pac:
         pactext = 'function FindProxyForURL(u,h){' + ('var b=/^(:?{})$/i;if(b.test(h))return "";'.format(args.block.__self__.pattern) if args.block else '')
         for i, option in enumerate(args.rserver):
@@ -161,13 +168,34 @@ def main():
     elif any(map(lambda o: o.sslclient, args.listen)):
         print('You must specify --ssl to listen in ssl mode')
         return
+
+    ####################
+    # Setup event loop #
+    ####################
     loop = asyncio.get_event_loop()
     if args.v:
         from pproxy import verbose
         verbose.setup(loop, args)
     servers = []
+
     for option in args.listen:
         print('Serving on', option.bind, 'by', ",".join(i.name for i in option.protos) + ('(SSL)' if option.sslclient else ''), '({})'.format(option.cipher.name) if option.cipher else '')
+
+        # Explanation of this shit:
+        # vars looks at an object and returns a dictionary of all its member variables
+        # ** then takes that dictionary and turns it into args for a function
+        # EX
+        #d = {"A": 13, "B": 15}
+        #def fun(A, B):
+        #  print(str(A) + " : " + str(B))
+        #fun(**d) # This actually works!
+
+        # functools is very similar to boost bind, though how we are using it now(with the ** operator) it operates as a dictionary
+        # Important, can't redefine values.
+
+        # This line therefore is passing all the values contained by args and option, as args, to proxy_handler
+        #   By creating a new callable partial function. And because proxy_handler can take extra args (thanks to **kwargs)
+        #   we can still pass more shit in if we want/need to
         handler = functools.partial(functools.partial(proxy_handler, **vars(args)), **vars(option))
         try:
             server = loop.run_until_complete(option.server(handler))
